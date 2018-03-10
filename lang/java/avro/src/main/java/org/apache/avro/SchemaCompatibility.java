@@ -230,6 +230,15 @@ public class SchemaCompatibility {
         final Schema reader,
         final Schema writer,
         final Deque<String> location) {
+      return getCompatibility(referenceToken, reader, writer, location, null);
+    }
+
+    private SchemaCompatibilityResult getCompatibility(
+        String referenceToken,
+        final Schema reader,
+        final Schema writer,
+        final Deque<String> location,
+        final Object readerFieldDefaultVal) {
       location.addFirst(referenceToken);
       LOG.debug("Checking compatibility of reader {} with writer {}", reader, writer);
       final ReaderWriter pair = new ReaderWriter(reader, writer);
@@ -243,12 +252,13 @@ public class SchemaCompatibility {
       } else {
         // Mark this reader/writer pair as "in progress":
         mMemoizeMap.put(pair, SchemaCompatibilityResult.recursionInProgress());
-        result = calculateCompatibility(reader, writer, location);
+        result = calculateCompatibility(reader, writer, location, readerFieldDefaultVal);
         mMemoizeMap.put(pair, result);
       }
       location.removeFirst();
       return result;
     }
+
 
     /**
      * Calculates the compatibility of a reader/writer schema pair.
@@ -265,7 +275,8 @@ public class SchemaCompatibility {
     private SchemaCompatibilityResult calculateCompatibility(
         final Schema reader,
         final Schema writer,
-        final Deque<String> location
+        final Deque<String> location,
+        final Object readerFieldDefaultVal
     ) {
       assert (reader != null);
       assert (writer != null);
@@ -295,7 +306,7 @@ public class SchemaCompatibility {
           }
           case ENUM: {
             result = result.mergedWith(checkSchemaNames(reader, writer, location));
-            return result.mergedWith(checkReaderEnumContainsAllWriterEnumSymbols(reader, writer, location));
+            return result.mergedWith(checkReaderEnumContainsAllWriterEnumSymbolsOrHasDefaults(reader, writer, location, readerFieldDefaultVal));
           }
           case RECORD: {
             result = result.mergedWith(checkSchemaNames(reader, writer, location));
@@ -417,7 +428,7 @@ public class SchemaCompatibility {
         if (writerField == null) {
           // Reader field does not correspond to any field in the writer record schema, so the
           // reader field must have a default value.
-          if (readerField.defaultValue() == null) {
+          if (readerField.defaultVal() == null) {
             // reader field has no default value
             result = result.mergedWith(SchemaCompatibilityResult.incompatible(
                 SchemaIncompatibilityType.READER_FIELD_MISSING_DEFAULT_VALUE, reader, writer,
@@ -425,7 +436,7 @@ public class SchemaCompatibility {
           }
         } else {
           result = result.mergedWith(getCompatibility("type", readerField.schema(),
-              writerField.schema(), location));
+              writerField.schema(), location, readerField.defaultVal()));
         }
         // POP field index
         location.removeFirst();
@@ -436,16 +447,26 @@ public class SchemaCompatibility {
       return result;
     }
 
-    private SchemaCompatibilityResult checkReaderEnumContainsAllWriterEnumSymbols(
-        final Schema reader, final Schema writer, final Deque<String> location) {
+    private SchemaCompatibilityResult checkReaderEnumContainsAllWriterEnumSymbolsOrHasDefaults(
+        final Schema reader, final Schema writer, final Deque<String> location,
+        final Object fieldDefault) {
       SchemaCompatibilityResult result = SchemaCompatibilityResult.compatible();
       location.addFirst("symbols");
       final Set<String> symbols = new TreeSet<>(writer.getEnumSymbols());
       symbols.removeAll(reader.getEnumSymbols());
       if (!symbols.isEmpty()) {
-        result = SchemaCompatibilityResult.incompatible(
+        if (fieldDefault instanceof String && reader.getEnumSymbols().contains(fieldDefault)) {
+         symbols.clear();
+         result = SchemaCompatibilityResult.compatible();
+        } else if (reader.getEnumDefault() != null) {
+          //Don't need to check if it's in the symbols, that's checked at creation of schema time.
+          symbols.clear();
+          result = SchemaCompatibilityResult.compatible();
+        } else {
+          result = SchemaCompatibilityResult.incompatible(
             SchemaIncompatibilityType.MISSING_ENUM_SYMBOLS, reader, writer,
             symbols.toString(), asList(location));
+        }
       }
       // POP "symbols" literal
       location.removeFirst();

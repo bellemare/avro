@@ -50,6 +50,10 @@ public class ResolvingGrammarGenerator extends ValidatingGrammarGenerator {
     return Symbol.root(generate(writer, reader, new HashMap<>()));
   }
 
+  public Symbol generate(Schema writer, Schema reader, Map<LitS, Symbol> seen) throws IOException {
+      return generate(writer, reader, null, seen);
+    }
+
   /**
    * Resolves the writer schema <tt>writer</tt> and the reader schema
    * <tt>reader</tt> and returns the start symbol for the grammar generated.
@@ -63,7 +67,7 @@ public class ResolvingGrammarGenerator extends ValidatingGrammarGenerator {
    * @return          The start symbol for the resolving grammar
    * @throws IOException
    */
-  public Symbol generate(Schema writer, Schema reader,
+  private Symbol generate(Schema writer, Schema reader, Object readerFieldDefaultValue,
                                 Map<LitS, Symbol> seen) throws IOException
   {
     final Schema.Type writerType = writer.getType();
@@ -99,7 +103,7 @@ public class ResolvingGrammarGenerator extends ValidatingGrammarGenerator {
         if (writer.getFullName() == null
                 || writer.getFullName().equals(reader.getFullName())) {
           return Symbol.seq(mkEnumAdjust(writer.getEnumSymbols(),
-                  reader.getEnumSymbols()), Symbol.ENUM);
+              reader.getEnumSymbols(), reader.getEnumDefault()), Symbol.ENUM);
         }
         break;
 
@@ -270,10 +274,10 @@ public class ResolvingGrammarGenerator extends ValidatingGrammarGenerator {
         Field rf = reader.getField(fname);
         if (rf == null) {
           production[--count] =
-            Symbol.skipAction(generate(wf.schema(), wf.schema(), seen));
+            Symbol.skipAction(generate(wf.schema(), wf.schema(), null, seen));
         } else {
           production[--count] =
-            generate(wf.schema(), rf.schema(), seen);
+            generate(wf.schema(), rf.schema(), rf.defaultVal(), seen);
         }
       }
 
@@ -417,10 +421,15 @@ public class ResolvingGrammarGenerator extends ValidatingGrammarGenerator {
   }
 
   private static Symbol mkEnumAdjust(List<String> wsymbols,
-      List<String> rsymbols){
+                                     List<String> rsymbols, Object rEnumDefault){
     Object[] adjustments = new Object[wsymbols.size()];
     for (int i = 0; i < adjustments.length; i++) {
       int j = rsymbols.indexOf(wsymbols.get(i));
+      if (j == -1) {
+        if (rEnumDefault instanceof String) {
+          j = rsymbols.indexOf(rEnumDefault);
+        }
+      }
       adjustments[i] = (j == -1 ? "No match for " + wsymbols.get(i)
                                 : new Integer(j));
     }
